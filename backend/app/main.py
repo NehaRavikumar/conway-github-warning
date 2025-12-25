@@ -1,11 +1,19 @@
 import json
 import uuid
+import asyncio
+from .check_runs import check_runs_loop
 from datetime import datetime, timezone
 from fastapi import FastAPI, Query
 from .config import settings
 from .db import init_db, connect
 from fastapi.responses import StreamingResponse
 from .sse import IncidentBroadcaster
+from .poll_events import poll_events_loop, RECENT_REPOS
+from .github import GitHubClient
+from .check_runs import run_to_incident, insert_incident, FAIL_CONCLUSIONS
+
+
+
 
 
 app = FastAPI(title="Conway GitHub Warning System (v1)")
@@ -26,10 +34,56 @@ async def stream():
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
+@app.get("/debug/runs_sample")
+async def debug_runs_sample(repo: str = "vercel/next.js", per_page: int = 5):
+    owner, name = repo.split("/", 1)
+    gh = GitHubClient(settings.GITHUB_TOKEN)
+    data = await gh.list_workflow_runs(owner, name, per_page=per_page)
+    runs = data.get("workflow_runs", []) or []
+    return {
+        "repo": repo,
+        "count": len(runs),
+        "runs": [
+            {
+                "id": r.get("id"),
+                "name": r.get("name"),
+                "status": r.get("status"),
+                "conclusion": r.get("conclusion"),
+                "created_at": r.get("created_at"),
+                "html_url": r.get("html_url"),
+            }
+            for r in runs
+        ],
+    }
+
+@app.post("/debug/check_repo_once")
+async def debug_check_repo_once(repo: str = "vercel/next.js"):
+    owner, name = repo.split("/", 1)
+    gh = GitHubClient(settings.GITHUB_TOKEN)
+    data = await gh.list_workflow_runs(owner, name, per_page=10)
+    runs = data.get("workflow_runs", []) or []
+
+    failures = []
+    inserted = 0
+    for run in runs:
+        if run.get("conclusion") in FAIL_CONCLUSIONS:
+            inc = run_to_incident(run, repo)
+            ok = await insert_incident(settings.DB_PATH, inc)
+            failures.append({"run_id": run.get("id"), "conclusion": run.get("conclusion"), "inserted": ok})
+            if ok:
+                inserted += 1
+
+    return {"repo": repo, "runs_checked": len(runs), "failures": failures, "inserted": inserted}
 
 @app.on_event("startup")
 async def on_startup():
     await init_db(settings.DB_PATH)
+    asyncio.create_task(poll_events_loop())
+    asyncio.create_task(check_runs_loop(broadcaster))
+
+@app.get("/debug/recent_repos")
+async def debug_recent_repos(limit: int = 20):
+    return {"recent_repos": list(reversed(RECENT_REPOS[-limit:]))}
 
 @app.get("/health")
 async def health():
