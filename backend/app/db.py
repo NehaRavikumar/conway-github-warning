@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS incidents (
   incident_id    TEXT PRIMARY KEY,
   kind           TEXT NOT NULL,
   run_id         INTEGER NOT NULL UNIQUE,
+  dedupe_key     TEXT UNIQUE,
   repo_full_name TEXT NOT NULL,
   workflow_name  TEXT,
   run_number     INTEGER,
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS incidents (
   title          TEXT NOT NULL,
   tags_json      TEXT NOT NULL,
   evidence_json  TEXT NOT NULL,
+  summary_json   TEXT,
   inserted_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -43,8 +45,14 @@ async def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA_SQL)
+        # Ensure new columns exist when upgrading an existing DB.
+        cur = await db.execute("PRAGMA table_info(incidents)")
+        cols = {row[1] for row in await cur.fetchall()}
+        if "summary_json" not in cols:
+            await db.execute("ALTER TABLE incidents ADD COLUMN summary_json TEXT")
+        if "dedupe_key" not in cols:
+            await db.execute("ALTER TABLE incidents ADD COLUMN dedupe_key TEXT")
         await db.commit()
 
 def connect(db_path: str):
     return aiosqlite.connect(db_path)
-

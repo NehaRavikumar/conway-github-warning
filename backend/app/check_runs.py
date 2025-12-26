@@ -5,38 +5,20 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from .config import settings
-from .db import connect
+from .incidents import insert_incident
 from .github import GitHubClient
 from .poll_events import RECENT_REPOS
 from .repos import RepoScheduler
 from .sse import IncidentBroadcaster
+from .summary_queue import SummaryQueue
+from .services.run_logs import RunLogFetcher
+from .services.signal_pipeline import process_run_logs_for_signals
+from .types.signal import RunContext
 
 FAIL_CONCLUSIONS = {"failure", "timed_out"}
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-async def insert_incident(db_path: str, inc: Dict[str, Any]) -> bool:
-    async with connect(db_path) as db:
-        try:
-            cur = await db.execute(
-                """INSERT OR IGNORE INTO incidents(
-                    incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
-                    status, conclusion, html_url, created_at, updated_at,
-                    title, tags_json, evidence_json
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    inc["incident_id"], inc["kind"], inc["run_id"], inc["repo_full_name"], inc["workflow_name"], inc["run_number"],
-                    inc["status"], inc["conclusion"], inc["html_url"], inc["created_at"], inc["updated_at"],
-                    inc["title"], inc["tags_json"], inc["evidence_json"],
-                ),
-            )
-            await db.commit()
-            return (cur.rowcount or 0) > 0   # 1 if inserted, 0 if ignored
-        except Exception as e:
-            print(f"[runs] insert failed: {type(e).__name__}: {e}")
-            return False
-
 
 def run_to_incident(run: Dict[str, Any], repo_full_name: str) -> Dict[str, Any]:
     run_id = int(run["id"])
@@ -60,6 +42,7 @@ def run_to_incident(run: Dict[str, Any], repo_full_name: str) -> Dict[str, Any]:
         "incident_id": str(uuid.uuid4()),
         "kind": "workflow_failure",
         "run_id": run_id,
+        "dedupe_key": None,
         "repo_full_name": repo_full_name,
         "workflow_name": workflow_name,
         "run_number": run_number,
@@ -76,10 +59,16 @@ def run_to_incident(run: Dict[str, Any], repo_full_name: str) -> Dict[str, Any]:
         "_evidence": evidence,
     }
 
-async def check_runs_loop(broadcaster: IncidentBroadcaster):
+async def check_runs_loop(
+    broadcaster: IncidentBroadcaster,
+    summary_queue: SummaryQueue,
+    correlator,
+    plugins,
+):
     print("[runs] loop started")
     gh = GitHubClient(settings.GITHUB_TOKEN)
     scheduler = RepoScheduler(settings.HIGH_TRAFFIC_REPOS, min_interval_seconds=30)
+    log_fetcher = RunLogFetcher(gh, per_minute=settings.LOG_FETCH_PER_MIN)
     
     while True:
         # feed scheduler from the live RECENT_REPOS buffer
@@ -127,7 +116,29 @@ async def check_runs_loop(broadcaster: IncidentBroadcaster):
                                 "evidence": inc["_evidence"],
                             }
                             await broadcaster.publish(card)
+                            await summary_queue.enqueue(inc["incident_id"])
                             emitted += 1
+
+                        run_ctx = RunContext(
+                            repo_full_name=repo_full_name,
+                            owner=owner,
+                            run_id=inc["run_id"],
+                            html_url=inc["html_url"],
+                            workflow_name=inc["workflow_name"],
+                            conclusion=inc["conclusion"],
+                            updated_at=inc["updated_at"],
+                        )
+                        logs = await log_fetcher.fetch_run_logs(owner, repo, inc["run_id"]) or []
+                        if logs:
+                            await process_run_logs_for_signals(
+                                run_ctx,
+                                logs,
+                                plugins,
+                                correlator,
+                                settings.DB_PATH,
+                                broadcaster,
+                                source="live",
+                            )
 
                         # v1: single failure card per repo per cycle
                         break
@@ -141,4 +152,3 @@ async def check_runs_loop(broadcaster: IncidentBroadcaster):
             print(f"[runs] emitted {emitted} incidents (checked {len(repos)} repos)")
 
         await asyncio.sleep(settings.CHECK_RUNS_SECONDS)
-

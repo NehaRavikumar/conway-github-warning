@@ -10,7 +10,12 @@ from fastapi.responses import StreamingResponse
 from .sse import IncidentBroadcaster
 from .poll_events import poll_events_loop, RECENT_REPOS
 from .github import GitHubClient
-from .check_runs import run_to_incident, insert_incident, FAIL_CONCLUSIONS
+from .check_runs import run_to_incident, FAIL_CONCLUSIONS
+from .incidents import insert_incident
+from .summary_queue import SummaryQueue, RedisSummaryQueue, summary_worker_loop
+from .services.correlator import EcosystemCorrelator
+from .plugins.npm_auth_token_expired import NpmAuthTokenExpiredPlugin
+from .replay.fixtures import run_replay_fixtures
 
 
 
@@ -18,6 +23,18 @@ from .check_runs import run_to_incident, insert_incident, FAIL_CONCLUSIONS
 
 app = FastAPI(title="Conway GitHub Warning System (v1)")
 broadcaster = IncidentBroadcaster()
+summary_queue = (
+    RedisSummaryQueue(settings.REDIS_URL)
+    if settings.REDIS_URL
+    else SummaryQueue()
+)
+correlator = EcosystemCorrelator(
+    settings.WINDOW_MINUTES,
+    settings.MIN_REPOS,
+    settings.MIN_OWNERS,
+    settings.COOLDOWN_MINUTES,
+)
+signal_plugins = [NpmAuthTokenExpiredPlugin()]
 
 @app.get("/stream")
 async def stream():
@@ -78,8 +95,11 @@ async def debug_check_repo_once(repo: str = "vercel/next.js"):
 @app.on_event("startup")
 async def on_startup():
     await init_db(settings.DB_PATH)
-    asyncio.create_task(poll_events_loop())
-    asyncio.create_task(check_runs_loop(broadcaster))
+    asyncio.create_task(poll_events_loop(broadcaster, summary_queue))
+    asyncio.create_task(check_runs_loop(broadcaster, summary_queue, correlator, signal_plugins))
+    asyncio.create_task(summary_worker_loop(settings.DB_PATH, summary_queue, broadcaster))
+    if settings.REPLAY_FIXTURES:
+        asyncio.create_task(run_replay_fixtures(signal_plugins, correlator, broadcaster, settings.DB_PATH))
 
 @app.get("/debug/recent_repos")
 async def debug_recent_repos(limit: int = 20):
@@ -100,7 +120,7 @@ async def summary(
             SELECT
               incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
               status, conclusion, html_url, created_at, updated_at, title,
-              tags_json, evidence_json, inserted_at
+              tags_json, evidence_json, summary_json, inserted_at
             FROM incidents
             WHERE inserted_at >= ?
             ORDER BY inserted_at DESC
@@ -115,7 +135,7 @@ async def summary(
         (
             incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
             status, conclusion, html_url, created_at, updated_at, title,
-            tags_json, evidence_json, inserted_at
+            tags_json, evidence_json, summary_json, inserted_at
         ) = r
 
         cards.append({
@@ -133,6 +153,7 @@ async def summary(
             "title": title,
             "tags": json.loads(tags_json),
             "evidence": json.loads(evidence_json),
+            "summary": json.loads(summary_json) if summary_json else None,
             "inserted_at": inserted_at,
         })
 
@@ -180,16 +201,17 @@ async def seed_failure():
         await db.execute(
             """
             INSERT INTO incidents(
-                incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
+                incident_id, kind, run_id, dedupe_key, repo_full_name, workflow_name, run_number,
                 status, conclusion, html_url,
                 created_at, updated_at,
                 title, tags_json, evidence_json
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 incident_id,
                 "workflow_failure",
                 run_id,
+                None,
                 repo_full_name,
                 workflow_name,
                 1,
@@ -205,7 +227,10 @@ async def seed_failure():
         )
         await db.commit()
 
-    # 2) Build SSE card
+    # 2) Queue summary generation
+    await summary_queue.enqueue(incident_id)
+
+    # 3) Build SSE card
     card = {
         "incident_id": incident_id,
         "kind": "workflow_failure",
@@ -222,7 +247,7 @@ async def seed_failure():
         "evidence": evidence,
     }
 
-    # 3) Publish to SSE
+    # 4) Publish to SSE
     await broadcaster.publish(card)
 
     return {
@@ -230,5 +255,3 @@ async def seed_failure():
         "incident_id": incident_id,
         "run_id": run_id,
     }
-
-

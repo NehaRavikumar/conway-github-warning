@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from .config import settings
 from .db import connect
 from .github import GitHubClient
+from .incidents import insert_incident
+from .signals.workflow_exfiltration import detect_ghostaction_risk, FetchBudget
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -53,11 +55,12 @@ def add_recent_repo(repo_full_name: Optional[str]) -> None:
     if len(RECENT_REPOS) > 500:
         del RECENT_REPOS[:250]
 
-async def poll_events_loop():
+async def poll_events_loop(broadcaster, summary_queue):
     gh = GitHubClient(settings.GITHUB_TOKEN)
 
     while True:
         try:
+            budget = FetchBudget(settings.MAX_WORKFLOW_FETCHES_PER_CYCLE)
             events = await gh.list_global_events()
             new_count = 0
             for ev in events:
@@ -68,6 +71,28 @@ async def poll_events_loop():
                 if inserted:
                     new_count += 1
                     add_recent_repo(row.get("repo_full_name"))
+
+                    incidents = await detect_ghostaction_risk(ev, gh, budget)
+                    for inc in incidents:
+                        ok = await insert_incident(settings.DB_PATH, inc)
+                        if ok:
+                            card = {
+                                "incident_id": inc["incident_id"],
+                                "kind": inc["kind"],
+                                "repo_full_name": inc["repo_full_name"],
+                                "title": inc["title"],
+                                "workflow_name": inc["workflow_name"],
+                                "run_id": inc["run_id"],
+                                "run_number": inc["run_number"],
+                                "conclusion": inc["conclusion"],
+                                "status": inc["status"],
+                                "html_url": inc["html_url"],
+                                "created_at": inc["created_at"],
+                                "tags": inc["_tags"],
+                                "evidence": inc["_evidence"],
+                            }
+                            await broadcaster.publish(card)
+                            await summary_queue.enqueue(inc["incident_id"])
             # small visible signal in logs
             if new_count:
                 print(f"[poll] inserted {new_count} new events; recent_repos={len(RECENT_REPOS)}")
@@ -76,4 +101,3 @@ async def poll_events_loop():
             print(f"[poll] error: {type(e).__name__}")
 
         await asyncio.sleep(settings.POLL_EVENTS_SECONDS)
-
