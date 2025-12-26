@@ -19,8 +19,8 @@ def now_iso() -> str:
 async def insert_incident(db_path: str, inc: Dict[str, Any]) -> bool:
     async with connect(db_path) as db:
         try:
-            await db.execute(
-                """INSERT INTO incidents(
+            cur = await db.execute(
+                """INSERT OR IGNORE INTO incidents(
                     incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
                     status, conclusion, html_url, created_at, updated_at,
                     title, tags_json, evidence_json
@@ -32,10 +32,11 @@ async def insert_incident(db_path: str, inc: Dict[str, Any]) -> bool:
                 ),
             )
             await db.commit()
-            return True
-        except Exception:
-            # most likely UNIQUE constraint on run_id
+            return (cur.rowcount or 0) > 0   # 1 if inserted, 0 if ignored
+        except Exception as e:
+            print(f"[runs] insert failed: {type(e).__name__}: {e}")
             return False
+
 
 def run_to_incident(run: Dict[str, Any], repo_full_name: str) -> Dict[str, Any]:
     run_id = int(run["id"])
@@ -76,19 +77,25 @@ def run_to_incident(run: Dict[str, Any], repo_full_name: str) -> Dict[str, Any]:
     }
 
 async def check_runs_loop(broadcaster: IncidentBroadcaster):
+    print("[runs] loop started")
     gh = GitHubClient(settings.GITHUB_TOKEN)
-    scheduler = RepoScheduler(settings.HIGH_TRAFFIC_REPOS, min_interval_seconds=120)
-
+    scheduler = RepoScheduler(settings.HIGH_TRAFFIC_REPOS, min_interval_seconds=30)
+    
     while True:
         # feed scheduler from the live RECENT_REPOS buffer
         # (copy snapshot to avoid weirdness)
-        recent_snapshot = RECENT_REPOS[-50:]
-        for r in recent_snapshot:
-            scheduler.add_recent_repo(r)
+        #recent_snapshot = RECENT_REPOS[-50:]
+        #for r in recent_snapshot:
+            #scheduler.add_recent_repo(r)
 
-        repos = scheduler.next_batch(settings.MAX_REPOS_PER_CYCLE)
+        #repos = scheduler.next_batch(settings.MAX_REPOS_PER_CYCLE)
+        repos = settings.HIGH_TRAFFIC_REPOS[: settings.MAX_REPOS_PER_CYCLE]
+        print("[runs] checking HIGH_TRAFFIC only:", repos)
+
+        #print(f"[runs] cycle checking {len(repos)} repos: {repos[:3]}{'...' if len(repos)>3 else ''}")
+
         emitted = 0
-
+        
         for repo_full_name in repos:
             if "/" not in repo_full_name:
                 continue
@@ -128,7 +135,7 @@ async def check_runs_loop(broadcaster: IncidentBroadcaster):
             except Exception as e:
                 # keep it quiet; optional for now:
                 # print(f"[runs] {repo_full_name} error: {type(e).__name__}: {e}")
-                pass
+                print(f"[runs] {repo_full_name} error: {type(e).__name__}: {e}")
 
         if emitted:
             print(f"[runs] emitted {emitted} incidents (checked {len(repos)} repos)")
