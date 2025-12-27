@@ -13,6 +13,7 @@ from .github import GitHubClient
 from .check_runs import run_to_incident, FAIL_CONCLUSIONS
 from .incidents import insert_incident
 from .summary_queue import SummaryQueue, RedisSummaryQueue, summary_worker_loop
+from .services.osv_enrichment import EnrichmentQueue, osv_worker_loop, maybe_enqueue_enrichment
 from .services.correlator import EcosystemCorrelator
 from .plugins.npm_auth_token_expired import NpmAuthTokenExpiredPlugin
 from .replay.fixtures import run_replay_fixtures
@@ -28,6 +29,7 @@ summary_queue = (
     if settings.REDIS_URL
     else SummaryQueue()
 )
+enrichment_queue = EnrichmentQueue()
 correlator = EcosystemCorrelator(
     settings.WINDOW_MINUTES,
     settings.MIN_REPOS,
@@ -42,7 +44,8 @@ async def stream():
         # initial comment so client knows it's connected
         yield ": connected\n\n"
         async for card in broadcaster.subscribe():
-            yield "event: incident\n"
+            event_name = card.get("_event", "incident")
+            yield f"event: {event_name}\n"
             yield f"data: {json.dumps(card)}\n\n"
 
     return StreamingResponse(
@@ -95,11 +98,12 @@ async def debug_check_repo_once(repo: str = "vercel/next.js"):
 @app.on_event("startup")
 async def on_startup():
     await init_db(settings.DB_PATH)
-    asyncio.create_task(poll_events_loop(broadcaster, summary_queue))
-    asyncio.create_task(check_runs_loop(broadcaster, summary_queue, correlator, signal_plugins))
+    asyncio.create_task(poll_events_loop(broadcaster, summary_queue, enrichment_queue))
+    asyncio.create_task(check_runs_loop(broadcaster, summary_queue, enrichment_queue, correlator, signal_plugins))
     asyncio.create_task(summary_worker_loop(settings.DB_PATH, summary_queue, broadcaster))
+    asyncio.create_task(osv_worker_loop(settings.DB_PATH, enrichment_queue, broadcaster))
     if settings.REPLAY_FIXTURES:
-        asyncio.create_task(run_replay_fixtures(signal_plugins, correlator, broadcaster, settings.DB_PATH))
+        asyncio.create_task(run_replay_fixtures(signal_plugins, correlator, broadcaster, settings.DB_PATH, summary_queue, enrichment_queue))
 
 @app.get("/debug/recent_repos")
 async def debug_recent_repos(limit: int = 20):
@@ -120,7 +124,7 @@ async def summary(
             SELECT
               incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
               status, conclusion, html_url, created_at, updated_at, title,
-              tags_json, evidence_json, summary_json, inserted_at
+              tags_json, evidence_json, summary_json, enrichment_json, inserted_at
             FROM incidents
             WHERE inserted_at >= ?
             ORDER BY inserted_at DESC
@@ -135,7 +139,7 @@ async def summary(
         (
             incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
             status, conclusion, html_url, created_at, updated_at, title,
-            tags_json, evidence_json, summary_json, inserted_at
+            tags_json, evidence_json, summary_json, enrichment_json, inserted_at
         ) = r
 
         cards.append({
@@ -154,6 +158,7 @@ async def summary(
             "tags": json.loads(tags_json),
             "evidence": json.loads(evidence_json),
             "summary": json.loads(summary_json) if summary_json else None,
+            "enrichment": json.loads(enrichment_json) if enrichment_json else None,
             "inserted_at": inserted_at,
         })
 
@@ -204,8 +209,8 @@ async def seed_failure():
                 incident_id, kind, run_id, dedupe_key, repo_full_name, workflow_name, run_number,
                 status, conclusion, html_url,
                 created_at, updated_at,
-                title, tags_json, evidence_json
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                title, tags_json, evidence_json, enrichment_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 incident_id,
@@ -223,12 +228,24 @@ async def seed_failure():
                 title,
                 json.dumps(tags),
                 json.dumps(evidence),
+                None,
             ),
         )
         await db.commit()
 
     # 2) Queue summary generation
     await summary_queue.enqueue(incident_id)
+    await maybe_enqueue_enrichment(
+        {
+            "incident_id": incident_id,
+            "kind": "workflow_failure",
+            "repo_full_name": repo_full_name,
+            "tags": tags,
+            "evidence": evidence,
+        },
+        enrichment_queue,
+        settings.DB_PATH,
+    )
 
     # 3) Build SSE card
     card = {
@@ -255,3 +272,8 @@ async def seed_failure():
         "incident_id": incident_id,
         "run_id": run_id,
     }
+
+@app.post("/debug/replay_now")
+async def replay_now():
+    emitted = await run_replay_fixtures(signal_plugins, correlator, broadcaster, settings.DB_PATH, summary_queue, enrichment_queue)
+    return {"ok": True, "emitted": emitted}

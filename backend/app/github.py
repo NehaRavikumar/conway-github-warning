@@ -117,6 +117,12 @@ class GitHubClient:
         )
         return data
 
+    async def get_repo(self, owner: str, repo: str):
+        data, _headers = await self.get_json(
+            f"/repos/{owner}/{repo}",
+        )
+        return data
+
     async def get_user(self, login: str):
         data, _headers = await self.get_json(
             f"/users/{login}",
@@ -150,3 +156,9 @@ class GitHubClient:
             except Exception:
                 return ""
         return data.decode("utf-8", errors="replace")
+
+    async def get_check_runs(self, owner: str, repo: str, sha: str):
+        data, _headers = await self.get_json(
+            f"/repos/{owner}/{repo}/commits/{sha}/check-runs",
+        )
+        return data

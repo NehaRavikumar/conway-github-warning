@@ -1,0 +1,76 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  background: radial-gradient(circle at top, rgba(148, 163, 184, 0.08), transparent 45%),
+    linear-gradient(135deg, rgba(248, 250, 252, 0.95), rgba(255, 255, 255, 1));
+  min-height: 100vh;
+  color: #0f172a;
+}
+
+.ticker-track {
+  width: max-content;
+}
+
+.ticker-track.paused {
+  animation-play-state: paused;
+}
+
+.card-flip {
+  perspective: 1200px;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.25);
+}
+
+.overlay-card {
+  position: relative;
+  width: min(880px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+  background: white;
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.2);
+  animation: fadeUp 0.3s ease forwards;
+}
+
+.interrupt {
+  animation: interruptPulse 0.3s ease;
+}
+
+@keyframes interruptPulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  }
+}

@@ -15,11 +15,15 @@ IOC_DOMAINS = {
     "bold-dhawan.45-139-104-115.plesk.page",
     "493networking.cc",
 }
+IOC_WORKFLOW_NAME = "Github Actions Security"
 
 SECRET_RE = re.compile(r"secrets\.([A-Z0-9_]+)")
+SECRET_EXPR_RE = re.compile(r"\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}")
+TOJSON_SECRETS_RE = re.compile(r"toJSON\(\s*secrets\s*\)", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s)\"']+")
 EXFIL_TOOL_RE = re.compile(r"\b(curl|wget|Invoke-WebRequest|nc)\b", re.IGNORECASE)
 POST_FLAG_RE = re.compile(r"(\-X\s*POST|\-\-data|\-d\s)", re.IGNORECASE)
+BASE64_RE = re.compile(r"\bbase64\b", re.IGNORECASE)
 TRIGGER_RE = re.compile(r"\b(" + "|".join(SUSPICIOUS_TRIGGERS) + r")\b")
 PERMISSIONS_WRITE_RE = re.compile(r"\b(contents|id-token|pull-requests)\s*:\s*write\b", re.IGNORECASE)
 RUNNER_RE = re.compile(r"\bself-hosted\b", re.IGNORECASE)
@@ -65,6 +69,7 @@ def _external_domains(urls: Sequence[str]) -> List[str]:
     return sorted(set(domains))
 
 def _redact_secrets(line: str) -> str:
+    line = SECRET_EXPR_RE.sub("${{ secrets.REDACTED }}", line)
     return SECRET_RE.sub("secrets.REDACTED", line)
 
 def _extract_snippets(text: str, max_lines: int = 3) -> List[str]:
@@ -76,6 +81,26 @@ def _extract_snippets(text: str, max_lines: int = 3) -> List[str]:
         if len(matches) >= max_lines:
             break
     return matches
+
+def _extract_evidence_lines(text: str, max_lines: int = 8) -> List[str]:
+    lines = text.splitlines()
+    matches: List[str] = []
+    for line in lines:
+        if (
+            SECRET_RE.search(line)
+            or EXFIL_TOOL_RE.search(line)
+            or POST_FLAG_RE.search(line)
+            or BASE64_RE.search(line)
+            or URL_RE.search(line)
+            or IOC_WORKFLOW_NAME in line
+        ):
+            matches.append(_redact_secrets(line).strip())
+        if len(matches) >= max_lines:
+            break
+    return matches
+
+def _hash_secret_name(name: str) -> str:
+    return hashlib.sha1(name.encode("utf-8")).hexdigest()[:10]
 
 def _stable_run_id(key: str) -> int:
     digest = hashlib.sha1(key.encode("utf-8")).digest()
@@ -185,6 +210,33 @@ async def _get_workflow_text(gh, owner: str, repo: str, path: str, sha: str, bud
         return base64.b64decode(content).decode("utf-8", errors="replace")
     except Exception:
         return None
+
+async def _list_workflow_files(gh, owner: str, repo: str, ref: str, budget: FetchBudget) -> List[str]:
+    if not budget.take():
+        return []
+    try:
+        data = await gh.get_contents(owner, repo, WORKFLOW_DIR.rstrip("/"), ref=ref)
+    except Exception as e:
+        print(f"[signals] workflows list failed for {owner}/{repo}@{ref}: {type(e).__name__}")
+        return []
+    files = []
+    for item in data or []:
+        if item.get("type") != "file":
+            continue
+        path = item.get("path") or ""
+        if _is_workflow_path(path):
+            files.append(path)
+    return files
+
+async def _collect_known_secrets(gh, owner: str, repo: str, ref: str, budget: FetchBudget) -> List[str]:
+    secrets: List[str] = []
+    files = await _list_workflow_files(gh, owner, repo, ref, budget)
+    for path in files[:10]:
+        text = await _get_workflow_text(gh, owner, repo, path, ref, budget)
+        if not text:
+            continue
+        secrets.extend(SECRET_EXPR_RE.findall(text))
+    return sorted(set(secrets))
 
 async def _fetch_actor_context(gh, owner: str, repo: str, login: str, budget: FetchBudget) -> Optional[Dict[str, Any]]:
     if not login or not budget.take():
@@ -327,3 +379,117 @@ async def detect_ghostaction_risk(event: Dict[str, Any], gh, budget: FetchBudget
     }
 
     return [incident]
+
+async def detect_personalized_exfiltration(event: Dict[str, Any], gh, budget: FetchBudget) -> List[Dict[str, Any]]:
+    if event.get("type") != "PushEvent":
+        return []
+
+    repo = event.get("repo") or {}
+    repo_full_name = repo.get("name")
+    if not repo_full_name or "/" not in repo_full_name:
+        return []
+    owner, name = repo_full_name.split("/", 1)
+
+    payload = event.get("payload") or {}
+    commits = payload.get("commits") or []
+    base_sha = payload.get("before")
+    head_sha = payload.get("after")
+    actor = (event.get("actor") or {}).get("login")
+    created_at = event.get("created_at")
+
+    workflow_paths: List[str] = []
+    for c in commits:
+        for key in ("added", "modified", "removed"):
+            for path in c.get(key) or []:
+                if _is_workflow_path(path):
+                    workflow_paths.append(path)
+
+    if not workflow_paths and head_sha:
+        files = await _get_commit_files(gh, owner, name, head_sha, budget)
+        if files:
+            for f in files:
+                path = f.get("filename")
+                if _is_workflow_path(path or ""):
+                    workflow_paths.append(path)
+
+    if not workflow_paths or not head_sha or not base_sha:
+        return []
+
+    known_secrets = await _collect_known_secrets(gh, owner, name, base_sha, budget)
+
+    incidents: List[Dict[str, Any]] = []
+    for path in sorted(set(workflow_paths)):
+        text = await _get_workflow_text(gh, owner, name, path, head_sha, budget)
+        if not text:
+            continue
+
+        new_secrets = sorted(set(SECRET_EXPR_RE.findall(text)))
+        overlap = sorted(set(new_secrets) & set(known_secrets))
+
+        has_curl = bool(EXFIL_TOOL_RE.search(text))
+        has_post = bool(POST_FLAG_RE.search(text))
+        has_base64 = bool(BASE64_RE.search(text))
+        urls = URL_RE.findall(text)
+        external_domains = _external_domains(urls)
+        has_secret_ref = bool(SECRET_RE.search(text) or TOJSON_SECRETS_RE.search(text))
+        exfil_ok = has_curl and has_post and urls and has_secret_ref
+        if not exfil_ok:
+            continue
+
+        ioc_domains = [d for d in external_domains if d in IOC_DOMAINS or d.endswith(".plesk.page")]
+        has_ioc_name = IOC_WORKFLOW_NAME in text
+        confidence = "low"
+        if overlap:
+            confidence = "medium"
+        if has_base64 or TOJSON_SECRETS_RE.search(text):
+            confidence = "medium" if confidence == "low" else confidence
+        if ioc_domains or has_ioc_name:
+            confidence = "high"
+
+        evidence_lines = _extract_evidence_lines(text, max_lines=8)
+        overlap_hashes = [_hash_secret_name(n) for n in overlap]
+        evidence = {
+            "repo_full_name": repo_full_name,
+            "sha": head_sha,
+            "actor": actor,
+            "workflow_path": path,
+            "overlap_secrets": overlap_hashes,
+            "overlap_count": len(overlap),
+            "exfil_domain": ioc_domains[0] if ioc_domains else (external_domains[0] if external_domains else None),
+            "confidence": confidence,
+            "evidence_lines": evidence_lines,
+            "source": "global_events",
+        }
+
+        dedupe_key = f"personalized_exfil:{repo_full_name}:{head_sha}:{path}"
+        run_id = _stable_run_id(dedupe_key)
+        tags = [
+            "security",
+            "workflow_injection",
+            "secret_enumeration",
+            f"confidence:{confidence}",
+            f"overlap:{len(overlap)}",
+        ]
+
+        incident = {
+            "incident_id": hashlib.sha1(dedupe_key.encode("utf-8")).hexdigest(),
+            "kind": "personalized_secret_exfiltration",
+            "run_id": run_id,
+            "dedupe_key": dedupe_key,
+            "repo_full_name": repo_full_name,
+            "workflow_name": path,
+            "run_number": None,
+            "status": "detected",
+            "conclusion": confidence,
+            "html_url": f"https://github.com/{repo_full_name}/commit/{head_sha}",
+            "created_at": created_at,
+            "updated_at": created_at,
+            "title": f"Personalized secret exfiltration risk in {repo_full_name}",
+            "tags_json": json.dumps(tags),
+            "evidence_json": json.dumps(evidence),
+            "_tags": tags,
+            "_evidence": evidence,
+        }
+        incidents.append(incident)
+
+    return incidents

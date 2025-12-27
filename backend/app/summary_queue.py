@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import redis.asyncio as redis
 import httpx
@@ -111,7 +111,47 @@ async def _build_summary(incident: Dict[str, Any]) -> Dict[str, Any]:
         "root_cause": root_cause,
         "impact": impact,
         "next_steps": next_steps,
+        "risk_trajectory": "stable",
+        "risk_trajectory_reason": "Insufficient trend data; defaulting to stable.",
     }
+
+def _validate_trajectory(payload: Dict[str, Any]) -> Dict[str, Any]:
+    traj = payload.get("risk_trajectory")
+    reason = payload.get("risk_trajectory_reason")
+    if traj not in ("increasing", "stable", "recovering"):
+        traj = "stable"
+    if not reason or not isinstance(reason, str):
+        reason = "Insufficient trend data; defaulting to stable."
+    return {
+        "risk_trajectory": traj,
+        "risk_trajectory_reason": reason,
+    }
+
+async def _fetch_recent_repo_incidents(db_path: str, repo_full_name: str, limit: int = 5) -> List[Dict[str, Any]]:
+    async with connect(db_path) as db:
+        cur = await db.execute(
+            """
+            SELECT incident_id, created_at, kind, conclusion, summary_json, evidence_json
+            FROM incidents
+            WHERE repo_full_name = ? AND created_at >= datetime('now','-1 hour')
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (repo_full_name, limit),
+        )
+        rows = await cur.fetchall()
+
+    recent = []
+    for incident_id, created_at, kind, conclusion, summary_json, evidence_json in rows:
+        recent.append({
+            "incident_id": incident_id,
+            "created_at": created_at,
+            "kind": kind,
+            "conclusion": conclusion,
+            "summary": json.loads(summary_json) if summary_json else None,
+            "evidence": json.loads(evidence_json) if evidence_json else None,
+        })
+    return recent
 
 async def _llm_summary(incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     prompt = {
@@ -124,10 +164,13 @@ async def _llm_summary(incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "tags": incident.get("tags"),
         "evidence": incident.get("evidence"),
     }
+    if incident.get("_recent_repo_incidents") is not None:
+        prompt["recent_repo_incidents"] = incident.get("_recent_repo_incidents")
 
     system = (
         "You are a security incident summarizer. Return ONLY JSON with keys "
-        "root_cause, impact, next_steps. Each value is an array of 3-5 concise bullets. "
+        "root_cause, impact, next_steps (arrays of 3-5 bullets), plus "
+        "risk_trajectory (increasing|stable|recovering) and risk_trajectory_reason (1 sentence). "
         "Do not include secrets or token values. Keep each bullet under 20 words."
     )
     user = f"Summarize this incident:\n{json.dumps(prompt)}"
@@ -139,7 +182,7 @@ async def _llm_summary(incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
     body = {
         "model": settings.ANTHROPIC_MODEL,
-        "max_tokens": 350,
+        "max_tokens": 450,
         "temperature": 0.2,
         "system": system,
         "messages": [{"role": "user", "content": user}],
@@ -165,6 +208,8 @@ async def _llm_summary(incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if not all(k in parsed for k in ("root_cause", "impact", "next_steps")):
                 print("[summary] LLM response missing expected keys")
                 return None
+            traj = _validate_trajectory(parsed)
+            parsed.update(traj)
             print("[summary] LLM summary generated")
             return parsed
     except Exception as e:
@@ -187,6 +232,9 @@ async def summary_worker_loop(db_path: str, queue: Any, broadcaster) -> None:
         incident = await _fetch_incident(db_path, incident_id)
         if not incident:
             continue
+
+        recent = await _fetch_recent_repo_incidents(db_path, incident.get("repo_full_name"), limit=5)
+        incident["_recent_repo_incidents"] = recent
 
         summary = await _build_summary(incident)
         await _store_summary(db_path, incident_id, summary)
