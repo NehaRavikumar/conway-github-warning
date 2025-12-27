@@ -44,3 +44,8 @@ A second major influence came from recent npm supply-chain disruptions
 A single compromised maintainer or authentication failure can ripple across thousands of repositories. Many affected projects were “innocent bystanders” whose own code never changed. Risk was visible at the ecosystem level before local failures, but most tooling reacted only after breakage. This directly motivated treating ecosystem exposure as a first-class signal. In this system, repositories are flagged not only when they fail locally, but when they depend on infrastructure that is currently unstable elsewhere. To keep this actionable rather than noisy, vulnerability enrichment (via OSV.dev) is intentionally scoped to dependencies implicated by the triggering signal, framing vulnerabilities as contextual exposure rather than static defects.
 
 ## Improvements and Next Steps
+
+- Org-wide patterns: currently only tracking issues for each repo and looking at ecosystem wide issue, a next step would be to cluster and look at signals for repos on an org-wide basis. 
+- As the system runs for longer, summary graphs could be used to track things like risk accumulation for certain repos
+- Add a human feedback loop for the summaries and risk assesment
+- Add timelines for multi-process issues (ex. workflow modified → secret referenced → outbound POST → detection)
