@@ -1,4 +1,4 @@
-# Conway GitHub Warning System (Powered by Claude)
+# Conway GitHub Warning System
 
 ## Novelty
 
@@ -28,6 +28,7 @@ Rather than treating these incidents as isolated failures, the system is designe
 
 Two classes of incidents directly shaped both the detectors and the presentation of signals in this system.
 
+NOTE: Summaries are created using Claude
 ---
 
 ### GitHub Actions as an Attack Surface → GhostWatcher-style workflow signals
