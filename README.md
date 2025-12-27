@@ -1,4 +1,4 @@
-# Conway GitHub Warning System
+# Conway GitHub Warning System (Powered by Claude)
 
 ## Novelty
 
