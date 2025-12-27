@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv(override=False)
+if not os.getenv("FLY_APP_NAME"):
+    load_dotenv(override=False)
 
 class Settings:
     # keep placeholders now; we’ll use these in Step 2+

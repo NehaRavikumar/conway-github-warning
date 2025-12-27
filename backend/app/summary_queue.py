@@ -1,6 +1,7 @@
 import asyncio
 import json
 from typing import Any, Dict, Optional, List
+from urllib.parse import urlparse
 
 import redis.asyncio as redis
 import httpx
@@ -40,7 +41,10 @@ class RedisSummaryQueue:
 def get_summary_queue() -> "SummaryQueue | RedisSummaryQueue":
     redis_url = (settings.REDIS_URL or "").strip()
     if redis_url.startswith("redis://") or redis_url.startswith("rediss://"):
-        print("[startup] Using RedisSummaryQueue")
+        parsed = urlparse(redis_url)
+        host = parsed.hostname or "unknown"
+        port = parsed.port or 6379
+        print(f"[startup] Using RedisSummaryQueue redis://{host}:{port}")
         return RedisSummaryQueue(redis_url)
     print("[startup] REDIS_URL missing/invalid; using in-memory SummaryQueue")
     return SummaryQueue()
