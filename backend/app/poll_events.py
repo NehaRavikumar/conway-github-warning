@@ -7,6 +7,7 @@ from .config import settings
 from .db import connect
 from .github import GitHubClient
 from .incidents import insert_incident
+from .incident_fields import apply_incident_fields
 from .signals.workflow_exfiltration import detect_ghostaction_risk, detect_personalized_exfiltration, FetchBudget
 from .services.osv_enrichment import maybe_enqueue_enrichment
 
@@ -77,6 +78,7 @@ async def poll_events_loop(broadcaster, summary_queue, enrichment_queue):
                     incidents.extend(await detect_ghostaction_risk(ev, gh, budget))
                     incidents.extend(await detect_personalized_exfiltration(ev, gh, budget))
                     for inc in incidents:
+                        apply_incident_fields(inc)
                         ok = await insert_incident(settings.DB_PATH, inc)
                         if ok:
                             card = {
@@ -93,6 +95,9 @@ async def poll_events_loop(broadcaster, summary_queue, enrichment_queue):
                                 "created_at": inc["created_at"],
                                 "tags": inc["_tags"],
                                 "evidence": inc["_evidence"],
+                                "scope": inc.get("scope"),
+                                "surface": inc.get("surface"),
+                                "actor": inc.get("actor"),
                             }
                             await broadcaster.publish(card)
                             await summary_queue.enqueue(inc["incident_id"])

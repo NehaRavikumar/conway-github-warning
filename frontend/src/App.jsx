@@ -6,7 +6,10 @@ import {
   insertWithPriority,
   insertHighLeftmost,
   buildWhyFired,
-  mergeQueued
+  mergeQueued,
+  dedupeEcosystem,
+  getScope,
+  getSurface
 } from "./incidentUtils.js";
 
 const TIME_WINDOWS = [
@@ -92,7 +95,7 @@ export default function App() {
   const [paused, setPaused] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focusedIncident, setFocusedIncident] = useState(null);
-  const [expandedCards, setExpandedCards] = useState({});
+  const [expandedSummaries, setExpandedSummaries] = useState({});
   const [interruptId, setInterruptId] = useState(null);
   const [viewMode, setViewMode] = useState("live");
   const [timeWindow, setTimeWindow] = useState("all");
@@ -149,7 +152,7 @@ export default function App() {
         const resp = await fetch(`/summary?since=${encodeURIComponent(since)}`);
         const data = await resp.json();
         if (data.cards) {
-          setIncidentQueue(data.cards.sort(compareIncidents));
+          setIncidentQueue(dedupeEcosystem(data.cards.sort(compareIncidents)));
         }
       } catch (err) {
         // keep quiet
@@ -233,8 +236,8 @@ export default function App() {
     setPaused(true);
   };
 
-  const toggleCardExpand = (id) => {
-    setExpandedCards((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggleSummary = (id) => {
+    setExpandedSummaries((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
   const handleUnpause = () => {
@@ -252,7 +255,7 @@ export default function App() {
                 Live Incident Ticker · Attention Window (5)
               </p>
               <h1 className="mt-2 font-display text-3xl text-slate-900">
-                GhostWatcher Live Belt
+                Early Warning Surface
               </h1>
             </div>
             <div className="flex items-center gap-3">
@@ -380,9 +383,9 @@ export default function App() {
                           key={`${incident.incident_id}-${index}`}
                           incident={incident}
                           onFlip={() => handleInspect(incident)}
-                          isExpanded={!!expandedCards[incident.incident_id]}
-                          onToggleExpand={() => toggleCardExpand(incident.incident_id)}
                           interrupt={interruptId === incident.incident_id}
+                          isExpanded={!!expandedSummaries[incident.incident_id]}
+                          onToggleExpand={() => toggleSummary(incident.incident_id)}
                         />
                     ))}
                   </div>
@@ -443,54 +446,27 @@ function IncidentRow({ incident, onSelect }) {
   );
 }
 
-function IncidentCard({ incident, onFlip, isExpanded, onToggleExpand, interrupt }) {
+function IncidentCard({ incident, onFlip, interrupt, isExpanded, onToggleExpand }) {
   const time = parseTime(incident);
   const severity = getSeverity(incident);
   const type = getIssueType(incident);
-  const signatureTag = incident.evidence?.signature
-    ? incident.evidence.signature.replace(/_/g, " ")
-    : null;
-  const tags = [];
-  if (incident.kind === "ecosystem_incident") {
-    tags.push("npm Ecosystem");
-  }
-  if (signatureTag && tags.length < 3) tags.push(signatureTag);
-  const extraTag = (incident.tags || []).find((tag) => !tags.includes(tag));
-  if (extraTag && tags.length < 3) tags.push(extraTag);
-
+  const summaryText = summaryLine(incident);
   const summary = incident.summary || {};
   const rootCause = Array.isArray(summary.root_cause) ? summary.root_cause : [];
   const impact = Array.isArray(summary.impact) ? summary.impact : [];
   const nextSteps = Array.isArray(summary.next_steps) ? summary.next_steps : [];
-  const whyFired = buildWhyFired(incident);
-  const trajectory = summary.risk_trajectory;
-  const trajectoryReason = summary.risk_trajectory_reason;
 
   const renderBullets = (items) => {
     const visible = isExpanded ? items : items.slice(0, 2);
-    const hiddenCount = Math.max(items.length - visible.length, 0);
     return (
-      <>
-        <ul className="space-y-1 text-xs leading-snug text-slate-600">
-          {visible.map((item, idx) => (
-            <li key={`${item}-${idx}`} className="flex gap-2">
-              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-slate-400/70" />
-              <span>{item}</span>
-            </li>
-          ))}
-        </ul>
-        {!isExpanded && hiddenCount > 0 && (
-          <button
-            className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400"
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleExpand();
-            }}
-          >
-            +{hiddenCount} more
-          </button>
-        )}
-      </>
+      <ul className="mt-1 space-y-1 text-[11px] leading-snug text-slate-600">
+        {visible.map((item, idx) => (
+          <li key={`${item}-${idx}`} className="flex gap-2">
+            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-slate-400/70" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
     );
   };
 
@@ -499,7 +475,7 @@ function IncidentCard({ incident, onFlip, isExpanded, onToggleExpand, interrupt 
       <div
         role="button"
         tabIndex={0}
-        className={`card-face flex w-full cursor-pointer flex-col rounded-2xl bg-white p-4 text-left shadow-soft transition-transform hover:-translate-y-1 ${isExpanded ? "h-[30rem]" : "h-[26rem]"} ${interrupt ? "interrupt" : ""}`}
+        className={`card-face flex h-[28rem] w-full cursor-pointer flex-col rounded-2xl bg-white p-4 text-left shadow-soft transition-transform hover:-translate-y-1 ${interrupt ? "interrupt" : ""}`}
         onClick={onFlip}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
@@ -508,52 +484,35 @@ function IncidentCard({ incident, onFlip, isExpanded, onToggleExpand, interrupt 
           }
         }}
       >
-        <div className="relative pr-20">
+        <div className="relative">
           <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 truncate">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 whitespace-normal break-words">
               {incident.repo_full_name}
             </p>
             <p className="text-xs text-slate-400" title={time.toISOString()}>{relativeTime(time)}</p>
-            <p className="text-[11px] text-slate-500">
-              <span className="font-semibold text-slate-400">Why this fired:</span> {whyFired}
-            </p>
-            <div className="pt-1">
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                {type}
-              </span>
-              {trajectory && (
-                <span
-                  className="ml-2 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
-                  title={trajectoryReason || ""}
-                >
-                  {trajectory === "increasing" ? "Trajectory ↑" : trajectory === "recovering" ? "Trajectory ↓" : "Trajectory →"}
-                </span>
-              )}
-            </div>
           </div>
-          <span className={`absolute right-0 top-0 rounded-full border px-3 py-1 text-xs font-semibold ${tagPillClass(severity)}`}>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tagColor(type)}`}>
+            {type}
+          </span>
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tagPillClass(severity)}`}>
             {severity}
           </span>
         </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {tags.slice(0, 3).map((tag) => (
-            <span key={tag} className={`rounded-full border px-2 py-1 text-xs font-semibold ${tagColor(tag)}`}>
-              {tag}
-            </span>
-          ))}
-        </div>
-        <div className={`mt-4 flex-1 space-y-3 ${isExpanded ? "overflow-y-auto pr-1" : "overflow-hidden"}`}>
+        <p className="mt-6 text-sm font-medium text-slate-800 leading-snug line-clamp-3">{summaryText}</p>
+        <div className={`mt-3 space-y-3 ${isExpanded ? "overflow-y-auto pr-1" : "overflow-hidden"}`}>
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Root cause</p>
-            {rootCause.length ? renderBullets(rootCause) : <p className="text-xs text-slate-400">Pending analysis.</p>}
+            {rootCause.length ? renderBullets(rootCause) : <p className="mt-1 text-[11px] text-slate-400">Pending analysis.</p>}
           </div>
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Impact</p>
-            {impact.length ? renderBullets(impact) : <p className="text-xs text-slate-400">Pending analysis.</p>}
+            {impact.length ? renderBullets(impact) : <p className="mt-1 text-[11px] text-slate-400">Pending analysis.</p>}
           </div>
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Next steps</p>
-            {nextSteps.length ? renderBullets(nextSteps) : <p className="text-xs text-slate-400">Pending analysis.</p>}
+            {nextSteps.length ? renderBullets(nextSteps) : <p className="mt-1 text-[11px] text-slate-400">Pending analysis.</p>}
           </div>
         </div>
         <button
@@ -563,7 +522,7 @@ function IncidentCard({ incident, onFlip, isExpanded, onToggleExpand, interrupt 
             onToggleExpand();
           }}
         >
-          {isExpanded ? "Collapse" : "Expand"}
+          {isExpanded ? "Collapse Summary" : "Expand Summary"}
         </button>
       </div>
     </div>
@@ -574,9 +533,13 @@ function IncidentOverlay({ incident, onClose }) {
   const snippets = extractSnippets(incident);
   const rawJson = JSON.stringify(incident, null, 2);
   const summary = incident.summary || {};
-  const rootCause = Array.isArray(summary.root_cause) ? summary.root_cause : [];
-  const impact = Array.isArray(summary.impact) ? summary.impact : [];
-  const nextSteps = Array.isArray(summary.next_steps) ? summary.next_steps : [];
+  const whyFired = buildWhyFired(incident);
+  const trajectory = incident.risk_trajectory || summary.risk_trajectory;
+  const trajectoryReason = incident.risk_trajectory_reason || summary.risk_trajectory_reason;
+  const scope = getScope(incident);
+  const surface = getSurface(incident);
+  const severity = getSeverity(incident);
+  const type = getIssueType(incident);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(rawJson);
@@ -601,53 +564,37 @@ function IncidentOverlay({ incident, onClose }) {
         <div className="mt-4 grid gap-4 lg:grid-cols-3">
           <div className="space-y-3 lg:col-span-2">
             <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Triage Summary</h4>
-              <div className="mt-2 grid gap-3 sm:grid-cols-3">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Root cause</p>
-                  {rootCause.length ? (
-                    <ul className="mt-2 space-y-1 text-xs leading-snug text-slate-600">
-                      {rootCause.map((item, idx) => (
-                        <li key={`${item}-${idx}`} className="flex gap-2">
-                          <span className="mt-1 h-1.5 w-1.5 rounded-full bg-slate-400/70" />
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-xs text-slate-400">Pending analysis.</p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Impact</p>
-                  {impact.length ? (
-                    <ul className="mt-2 space-y-1 text-xs leading-snug text-slate-600">
-                      {impact.map((item, idx) => (
-                        <li key={`${item}-${idx}`} className="flex gap-2">
-                          <span className="mt-1 h-1.5 w-1.5 rounded-full bg-slate-400/70" />
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-xs text-slate-400">Pending analysis.</p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Next steps</p>
-                  {nextSteps.length ? (
-                    <ul className="mt-2 space-y-1 text-xs leading-snug text-slate-600">
-                      {nextSteps.map((item, idx) => (
-                        <li key={`${item}-${idx}`} className="flex gap-2">
-                          <span className="mt-1 h-1.5 w-1.5 rounded-full bg-slate-400/70" />
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-xs text-slate-400">Pending analysis.</p>
-                  )}
-                </div>
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Decision Surface</h4>
+              {whyFired && (
+                <p className="mt-2 text-sm text-slate-600">
+                  <span className="font-semibold text-slate-400">Why this fired:</span> {whyFired}
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                  {type}
+                </span>
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tagPillClass(severity)}`}>
+                  {severity}
+                </span>
+                {trajectory && (
+                  <span
+                    className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                    title={trajectoryReason || ""}
+                  >
+                    {trajectory === "increasing" ? "Trajectory ↑" : trajectory === "recovering" ? "Trajectory ↓" : "Trajectory →"}
+                  </span>
+                )}
+                {scope && (
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                    Scope: {scope}
+                  </span>
+                )}
+                {surface && (
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                    Surface: {surface}
+                  </span>
+                )}
               </div>
             </div>
             <div>

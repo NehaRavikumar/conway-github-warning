@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, List
 
 from ..incidents import insert_incident
+from ..incident_fields import apply_incident_fields
 from ..summary_queue import SummaryQueue
 from ..services.osv_enrichment import maybe_enqueue_enrichment, EnrichmentQueue
 from ..services.signal_pipeline import process_run_logs_for_signals
@@ -205,6 +206,7 @@ async def _emit_personalized_exfiltration_example(
         "_evidence": evidence,
     }
 
+    apply_incident_fields(incident)
     inserted = await insert_incident(db_path, incident)
     if not inserted:
         return 0

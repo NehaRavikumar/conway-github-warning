@@ -124,7 +124,9 @@ async def summary(
             SELECT
               incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
               status, conclusion, html_url, created_at, updated_at, title,
-              tags_json, evidence_json, summary_json, enrichment_json, inserted_at
+              tags_json, evidence_json, summary_json, enrichment_json,
+              why_this_fired, risk_trajectory, risk_trajectory_reason,
+              scope, surface, actor_json, inserted_at
             FROM incidents
             WHERE inserted_at >= ?
             ORDER BY inserted_at DESC
@@ -139,7 +141,9 @@ async def summary(
         (
             incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
             status, conclusion, html_url, created_at, updated_at, title,
-            tags_json, evidence_json, summary_json, enrichment_json, inserted_at
+            tags_json, evidence_json, summary_json, enrichment_json,
+            why_this_fired, risk_trajectory, risk_trajectory_reason,
+            scope, surface, actor_json, inserted_at
         ) = r
 
         cards.append({
@@ -159,6 +163,12 @@ async def summary(
             "evidence": json.loads(evidence_json),
             "summary": json.loads(summary_json) if summary_json else None,
             "enrichment": json.loads(enrichment_json) if enrichment_json else None,
+            "why_this_fired": why_this_fired,
+            "risk_trajectory": risk_trajectory,
+            "risk_trajectory_reason": risk_trajectory_reason,
+            "scope": scope,
+            "surface": surface,
+            "actor": json.loads(actor_json) if actor_json else None,
             "inserted_at": inserted_at,
         })
 
