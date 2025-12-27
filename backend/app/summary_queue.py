@@ -42,10 +42,13 @@ def get_summary_queue() -> "SummaryQueue | RedisSummaryQueue":
     redis_url = (settings.REDIS_URL or "").strip()
     if redis_url.startswith("redis://") or redis_url.startswith("rediss://"):
         parsed = urlparse(redis_url)
-        host = parsed.hostname or "unknown"
+        host = parsed.hostname
         port = parsed.port or 6379
-        print(f"[startup] Using RedisSummaryQueue redis://{host}:{port}")
-        return RedisSummaryQueue(redis_url)
+        if host:
+            print(f"[startup] Using RedisSummaryQueue redis://{host}:{port}")
+            return RedisSummaryQueue(redis_url)
+        print("[startup] REDIS_URL invalid (missing host); using in-memory SummaryQueue")
+        return SummaryQueue()
     print("[startup] REDIS_URL missing/invalid; using in-memory SummaryQueue")
     return SummaryQueue()
 

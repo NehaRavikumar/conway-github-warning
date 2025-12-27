@@ -1,9 +1,11 @@
 import json
 import uuid
 import asyncio
+from pathlib import Path
 from .check_runs import check_runs_loop
 from datetime import datetime, timezone
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, APIRouter
+from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .db import init_db, connect
 from fastapi.responses import StreamingResponse
@@ -23,6 +25,7 @@ from .replay.fixtures import run_replay_fixtures
 
 
 app = FastAPI(title="Conway GitHub Warning System (v1)")
+api = APIRouter()
 broadcaster = IncidentBroadcaster()
 summary_queue = get_summary_queue()
 enrichment_queue = EnrichmentQueue()
@@ -34,7 +37,7 @@ correlator = EcosystemCorrelator(
 )
 signal_plugins = [NpmAuthTokenExpiredPlugin()]
 
-@app.get("/stream")
+@api.get("/stream")
 async def stream():
     async def gen():
         # initial comment so client knows it's connected
@@ -50,7 +53,7 @@ async def stream():
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
-@app.get("/debug/runs_sample")
+@api.get("/debug/runs_sample")
 async def debug_runs_sample(repo: str = "vercel/next.js", per_page: int = 5):
     owner, name = repo.split("/", 1)
     gh = GitHubClient(settings.GITHUB_TOKEN)
@@ -72,7 +75,7 @@ async def debug_runs_sample(repo: str = "vercel/next.js", per_page: int = 5):
         ],
     }
 
-@app.post("/debug/check_repo_once")
+@api.post("/debug/check_repo_once")
 async def debug_check_repo_once(repo: str = "vercel/next.js"):
     owner, name = repo.split("/", 1)
     gh = GitHubClient(settings.GITHUB_TOKEN)
@@ -101,15 +104,15 @@ async def on_startup():
     if settings.REPLAY_FIXTURES:
         asyncio.create_task(run_replay_fixtures(signal_plugins, correlator, broadcaster, settings.DB_PATH, summary_queue, enrichment_queue))
 
-@app.get("/debug/recent_repos")
+@api.get("/debug/recent_repos")
 async def debug_recent_repos(limit: int = 20):
     return {"recent_repos": list(reversed(RECENT_REPOS[-limit:]))}
 
-@app.get("/health")
+@api.get("/health")
 async def health():
     return {"ok": True}
 
-@app.get("/summary")
+@api.get("/summary")
 async def summary(
     since: str = Query(..., description="SQLite datetime string OR ISO string; v1 uses inserted_at >= since"),
     limit: int = Query(100, ge=1, le=500),
@@ -169,7 +172,7 @@ async def summary(
         })
 
     return {"cards": cards}
-@app.post("/dev/seed_failure")
+@api.post("/dev/seed_failure")
 async def seed_failure():
     if not settings.DEV_MODE:
         return {"error": "DEV_MODE is false"}
@@ -279,7 +282,13 @@ async def seed_failure():
         "run_id": run_id,
     }
 
-@app.post("/debug/replay_now")
+@api.post("/debug/replay_now")
 async def replay_now():
     emitted = await run_replay_fixtures(signal_plugins, correlator, broadcaster, settings.DB_PATH, summary_queue, enrichment_queue)
     return {"ok": True, "emitted": emitted}
+
+app.include_router(api, prefix="/api")
+
+static_dir = Path(__file__).resolve().parent / "static"
+if static_dir.exists():
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")

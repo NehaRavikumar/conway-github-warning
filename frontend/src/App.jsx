@@ -111,7 +111,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    const es = new EventSource("/stream");
+    const es = new EventSource("/api/stream");
     es.addEventListener("incident", (event) => {
       const incoming = JSON.parse(event.data);
       if (pauseTicker) {
@@ -149,7 +149,7 @@ export default function App() {
     const fetchInitial = async () => {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       try {
-        const resp = await fetch(`/summary?since=${encodeURIComponent(since)}`);
+        const resp = await fetch(`/api/summary?since=${encodeURIComponent(since)}`);
         const data = await resp.json();
         if (data.cards) {
           setIncidentQueue(dedupeEcosystem(data.cards.sort(compareIncidents)));
