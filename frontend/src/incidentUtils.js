@@ -45,6 +45,20 @@ export const compareIncidents = (a, b) => {
   return parseTime(a).getTime() - parseTime(b).getTime();
 };
 
+export const getIncidentKey = (incident) => {
+  if (incident.incident_id) return incident.incident_id;
+  const parts = [
+    incident.kind,
+    incident.repo_full_name,
+    incident.run_id,
+    incident.created_at,
+    incident.title
+  ]
+    .filter(Boolean)
+    .join("|");
+  return parts || JSON.stringify(incident);
+};
+
 export const insertWithPriority = (queue, incident) => {
   if (incident.kind === "ecosystem_incident") {
     const signature = incident.evidence?.signature || "";
@@ -61,7 +75,8 @@ export const insertWithPriority = (queue, incident) => {
       return queue;
     }
   }
-  const existing = queue.findIndex((item) => item.incident_id === incident.incident_id);
+  const targetKey = getIncidentKey(incident);
+  const existing = queue.findIndex((item) => getIncidentKey(item) === targetKey);
   if (existing !== -1) {
     const next = [...queue];
     next[existing] = { ...queue[existing], ...incident };
@@ -71,7 +86,8 @@ export const insertWithPriority = (queue, incident) => {
 };
 
 export const insertHighLeftmost = (queue, incident) => {
-  const rest = queue.filter((item) => item.incident_id !== incident.incident_id);
+  const targetKey = getIncidentKey(incident);
+  const rest = queue.filter((item) => getIncidentKey(item) !== targetKey);
   return [incident, ...rest];
 };
 
@@ -79,15 +95,20 @@ export const dedupeEcosystem = (queue) => {
   const seen = new Set();
   const next = [];
   for (const item of queue) {
+    const key = getIncidentKey(item);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
     if (item.kind === "ecosystem_incident") {
       const signature = item.evidence?.signature || "";
       const source = item.evidence?.source || "";
       const title = item.title || "";
-      const key = `${signature}|${source}|${title}`;
-      if (seen.has(key)) {
+      const ecoKey = `${signature}|${source}|${title}`;
+      if (seen.has(ecoKey)) {
         continue;
       }
-      seen.add(key);
+      seen.add(ecoKey);
     }
     next.push(item);
   }

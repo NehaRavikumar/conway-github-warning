@@ -15,7 +15,7 @@ export default {
       keyframes: {
         ticker: {
           "0%": { transform: "translateX(0)" },
-          "100%": { transform: "translateX(-50%)" }
+          "100%": { transform: "translateX(-100%)" }
         },
         fadeUp: {
           "0%": { opacity: "0", transform: "translateY(10px)" },

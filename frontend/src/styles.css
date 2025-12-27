@@ -17,10 +17,21 @@ body {
 }
 
 .ticker-track {
-  width: max-content;
+  position: relative;
+  height: 30rem;
 }
 
-.ticker-track.paused {
+.ticker-item {
+  position: absolute;
+  top: 0;
+  left: calc(100% + var(--offset, 0rem));
+  --travel: calc(100vw + 24rem);
+  animation-name: tickerItem;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.ticker-track.paused .ticker-item {
   animation-play-state: paused;
 }
 
@@ -72,5 +83,14 @@ body {
   100% {
     transform: scale(1);
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  }
+}
+
+@keyframes tickerItem {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(calc(-1 * var(--travel)));
   }
 }

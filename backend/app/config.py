@@ -25,6 +25,7 @@ class Settings:
     COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "30"))
     LOG_FETCH_PER_MIN = int(os.getenv("LOG_FETCH_PER_MIN", "20"))
     REPLAY_FIXTURES = os.getenv("REPLAY_FIXTURES", "0") == "1"
+    REPLAY_ALWAYS = os.getenv("REPLAY_ALWAYS", "0") == "1"
 
 
 settings = Settings()

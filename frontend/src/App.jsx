@@ -9,7 +9,8 @@ import {
   mergeQueued,
   dedupeEcosystem,
   getScope,
-  getSurface
+  getSurface,
+  getIncidentKey
 } from "./incidentUtils.js";
 
 const TIME_WINDOWS = [
@@ -115,7 +116,13 @@ export default function App() {
     es.addEventListener("incident", (event) => {
       const incoming = JSON.parse(event.data);
       if (pauseTicker) {
-        setQueuedIncidents((prev) => [...prev, incoming]);
+        setQueuedIncidents((prev) => {
+          const key = getIncidentKey(incoming);
+          if (prev.some((item) => getIncidentKey(item) === key)) {
+            return prev;
+          }
+          return [...prev, incoming];
+        });
         return;
       }
       const severity = getSeverity(incoming);
@@ -171,7 +178,8 @@ export default function App() {
   }, [pauseTicker, queuedIncidents]);
 
   const types = useMemo(() => {
-    const set = new Set(incidentQueue.map(getIssueType));
+    const set = new Set(Object.values(TYPE_LABELS));
+    incidentQueue.forEach((incident) => set.add(getIssueType(incident)));
     return Array.from(set).sort();
   }, [incidentQueue]);
 
@@ -203,7 +211,10 @@ export default function App() {
   }, [filtered]);
 
   const topFive = sorted.slice(0, 5);
-  const tickerItems = topFive.length > 0 ? [...topFive, ...topFive] : [];
+  const tickerItems = topFive;
+  const tickerDuration = 120;
+  const tickerSpacingRem = 20;
+  const tickerKey = topFive.map((incident) => incident.incident_id).join("-");
 
   const clearFilters = () => {
     setTimeWindow("all");
@@ -375,18 +386,24 @@ export default function App() {
                 {tickerItems.length === 0 ? (
                   <div className="text-sm text-slate-500">No incidents yet.</div>
                 ) : (
-                  <div
-                    className={`ticker-track flex gap-4 ${pauseTicker ? "paused" : ""} animate-ticker`}
-                  >
+                  <div key={tickerKey} className={`ticker-track ${pauseTicker ? "paused" : ""}`}>
                     {tickerItems.map((incident, index) => (
+                      <div
+                        key={incident.incident_id}
+                        className="ticker-item"
+                        style={{
+                          animationDuration: `${tickerDuration}s`,
+                          "--offset": `${tickerSpacingRem * index}rem`
+                        }}
+                      >
                         <IncidentCard
-                          key={`${incident.incident_id}-${index}`}
                           incident={incident}
                           onFlip={() => handleInspect(incident)}
                           interrupt={interruptId === incident.incident_id}
                           isExpanded={!!expandedSummaries[incident.incident_id]}
                           onToggleExpand={() => toggleSummary(incident.incident_id)}
                         />
+                      </div>
                     ))}
                   </div>
                 )}

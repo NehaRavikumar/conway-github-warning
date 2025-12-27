@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, List
 
 from ..incidents import insert_incident
+from ..config import settings
 from ..incident_fields import apply_incident_fields
 from ..summary_queue import SummaryQueue
 from ..services.osv_enrichment import maybe_enqueue_enrichment, EnrichmentQueue
@@ -36,6 +37,7 @@ async def run_replay_fixtures(
         )
         await asyncio.sleep(0.05)
 
+    emitted += await _emit_ecosystem_example(broadcaster, db_path, summary_queue, enrichment_queue)
     emitted += await _emit_personalized_exfiltration_example(broadcaster, db_path, summary_queue, enrichment_queue)
     return emitted
 
@@ -157,8 +159,11 @@ async def _emit_personalized_exfiltration_example(
     summary_queue: SummaryQueue,
     enrichment_queue: EnrichmentQueue,
 ) -> int:
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
     dedupe_key = "personalized_exfil:demo/repo:deadbeef:.github/workflows/ghostaction.yml"
+    if settings.REPLAY_ALWAYS:
+        dedupe_key = f"{dedupe_key}:{now_dt.strftime('%Y%m%d%H%M')}"
     incident_id = hashlib.sha1(dedupe_key.encode("utf-8")).hexdigest()
 
     evidence = {
@@ -186,6 +191,7 @@ async def _emit_personalized_exfiltration_example(
         "overlap:1",
     ]
 
+    run_id = -int(int(hashlib.sha1(dedupe_key.encode("utf-8")).hexdigest()[:8], 16))
     incident = {
         "incident_id": incident_id,
         "kind": "personalized_secret_exfiltration",
@@ -204,6 +210,99 @@ async def _emit_personalized_exfiltration_example(
         "evidence_json": json.dumps(evidence),
         "_tags": tags,
         "_evidence": evidence,
+    }
+
+    apply_incident_fields(incident)
+    inserted = await insert_incident(db_path, incident)
+    if not inserted:
+        return 0
+    await summary_queue.enqueue(incident_id)
+    await maybe_enqueue_enrichment(incident, enrichment_queue, db_path)
+
+    card = {
+        "incident_id": incident["incident_id"],
+        "kind": incident["kind"],
+        "repo_full_name": incident["repo_full_name"],
+        "title": incident["title"],
+        "workflow_name": incident["workflow_name"],
+        "run_id": incident["run_id"],
+        "run_number": incident["run_number"],
+        "conclusion": incident["conclusion"],
+        "status": incident["status"],
+        "html_url": incident["html_url"],
+        "created_at": incident["created_at"],
+        "tags": incident["_tags"],
+        "evidence": incident["_evidence"],
+    }
+    await broadcaster.publish(card)
+    return 1
+
+async def _emit_ecosystem_example(
+    broadcaster,
+    db_path: str,
+    summary_queue: SummaryQueue,
+    enrichment_queue: EnrichmentQueue,
+) -> int:
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    signature = "npm_auth_token_expired"
+    dedupe_key = "ecosystem:replay:npm_auth_token_expired"
+    if settings.REPLAY_ALWAYS:
+        dedupe_key = f"{dedupe_key}:{now_dt.strftime('%Y%m%d%H%M')}"
+    incident_id = hashlib.sha1(dedupe_key.encode("utf-8")).hexdigest()
+
+    sample_repos = ["org-a/repo-one", "org-b/repo-two", "org-c/repo-three"]
+    payload = {
+        "type": "ECOSYSTEM_INCIDENT",
+        "signature": signature,
+        "plugin": signature,
+        "confidence": 0.9,
+        "window_minutes": 15,
+        "affected_repos_count": 6,
+        "unique_owners_count": 3,
+        "sample_repos": sample_repos,
+        "evidence_samples": [
+            {"repo": "org-a/repo-one", "matched_line": "npm ERR! code E401", "run_id": 1001},
+            {"repo": "org-b/repo-two", "matched_line": "npm ERR! Unable to authenticate", "run_id": 1002},
+        ],
+        "root_cause_hypothesis": (
+            "Widespread npm authentication failures consistent with token expiration/revocation."
+        ),
+        "impact": "CI fails during npm install / npm ci across multiple repositories in a short window.",
+        "next_steps": [
+            "Rotate/regenerate npm token used in CI secrets.",
+            "Avoid committing tokens to .npmrc; use CI secrets or automation tokens.",
+            "Re-run failed workflows after updating credentials.",
+        ],
+        "source": "replay",
+    }
+
+    tags = [
+        "ecosystem",
+        "incident",
+        "npm",
+        f"signature:{signature}",
+        "source:replay",
+    ]
+
+    incident = {
+        "incident_id": incident_id,
+        "kind": "ecosystem_incident",
+        "run_id": run_id,
+        "dedupe_key": dedupe_key,
+        "repo_full_name": "npm ecosystem",
+        "workflow_name": signature,
+        "run_number": None,
+        "status": "detected",
+        "conclusion": "high",
+        "html_url": "https://www.npmjs.com/",
+        "created_at": now,
+        "updated_at": now,
+        "title": f"Ecosystem incident: npm auth failures across {sample_repos[0]} +{len(sample_repos) - 1}",
+        "tags_json": json.dumps(tags),
+        "evidence_json": json.dumps(payload),
+        "_tags": tags,
+        "_evidence": payload,
     }
 
     apply_incident_fields(incident)
