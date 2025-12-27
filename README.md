@@ -29,7 +29,7 @@ Two classes of incidents directly shaped both the detectors and the presentation
 
 ---
 
-### GitHub Actions as an Attack Surface *→ GhostWatcher-style workflow signals*
+### GitHub Actions as an Attack Surface → GhostWatcher-style workflow signals
 
 Investigations into AI-assisted workflow hijacking  
 (see: https://breached.company/when-github-became-the-battlefield-how-ai-powered-malware-and-workflow-hijacking-exposed-thousands-of-developer-secrets/) revealed a critical shift in how modern attacks operate: **CI/CD automation itself has become the primary attack surface**, rather than application code.
@@ -51,7 +51,7 @@ Crucially, these signals are surfaced **even when no exploit or outage has yet o
 
 ---
 
-### Ecosystem Fragility & Supply Chain Incidents  *→ Ecosystem exposure signals*
+### Ecosystem Fragility & Supply Chain Incidents  → Ecosystem exposure signals
 
 A second major influence came from recent npm supply-chain disruptions  
 (see: https://dev.to/usman_awan/the-night-npm-caught-fire-inside-the-2025-javascript-supply-chain-meltdown-52o3), which highlighted a different but related failure mode:
