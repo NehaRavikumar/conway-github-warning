@@ -1,12 +1,28 @@
-# fly.toml app configuration file generated for conway-warning-system on 2025-12-27T05:44:18Z
+# fly.toml app configuration file generated for conway-early-warning on 2025-12-27T03:57:44Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'conway-warning-system'
+app = 'conway-early-warning'
 primary_region = 'ord'
 
 [build]
+
+[env]
+DB_PATH=/data/app.db
+HIGH_TRAFFIC_REPOS=facebook/react,vercel/next.js,actions/checkout
+DEV_MODE=true
+MAX_WORKFLOW_FETCHES_PER_CYCLE=5
+GHOSTACTION_SCORE_THRESHOLD=60
+ANTHROPIC_MODEL=claude-3-5-haiku-20241022
+REPLAY_FIXTURES=1
+WINDOW_MINUTES=15
+MIN_REPOS=3
+COOLDOWN_MINUTES=0
+
+[mounts]
+  source = "data"
+  destination = "/data"
 
 [http_service]
   internal_port = 8080
