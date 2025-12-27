@@ -2,11 +2,12 @@
 
 ## Novelty
 
-- **Signals as risk expansion, not isolated events**  
-  Instead of treating GitHub events as standalone alerts, the system defines signals as moments where operational power (automation, secrets, dependencies) expands faster than guardrails and oversight.
 
 - **Workflow-first threat model inspired by real attacks**  
   Detection logic is explicitly shaped by real-world workflow hijacking incidents, focusing on configuration drift, secret reuse, and personalized exfiltration patterns *before* an exploit or outage occurs.
+
+- **Signals as risk expansion, not isolated events**  
+  Instead of treating GitHub events as standalone alerts, the system defines signals as moments where operational power (automation, secrets, dependencies) expands faster than guardrails.
 
 - **Ecosystem exposure as a first-class signal**  
   Repositories are flagged not only when they fail locally, but when they depend on external ecosystems (e.g. npm) that are currently unstable elsewhere, surfacing second-order risk early.
