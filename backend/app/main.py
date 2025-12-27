@@ -12,7 +12,7 @@ from .poll_events import poll_events_loop, RECENT_REPOS
 from .github import GitHubClient
 from .check_runs import run_to_incident, FAIL_CONCLUSIONS
 from .incidents import insert_incident
-from .summary_queue import SummaryQueue, RedisSummaryQueue, summary_worker_loop
+from .summary_queue import SummaryQueue, RedisSummaryQueue, summary_worker_loop, get_summary_queue
 from .services.osv_enrichment import EnrichmentQueue, osv_worker_loop, maybe_enqueue_enrichment
 from .services.correlator import EcosystemCorrelator
 from .plugins.npm_auth_token_expired import NpmAuthTokenExpiredPlugin
@@ -24,11 +24,7 @@ from .replay.fixtures import run_replay_fixtures
 
 app = FastAPI(title="Conway GitHub Warning System (v1)")
 broadcaster = IncidentBroadcaster()
-summary_queue = (
-    RedisSummaryQueue(settings.REDIS_URL)
-    if settings.REDIS_URL
-    else SummaryQueue()
-)
+summary_queue = get_summary_queue()
 enrichment_queue = EnrichmentQueue()
 correlator = EcosystemCorrelator(
     settings.WINDOW_MINUTES,

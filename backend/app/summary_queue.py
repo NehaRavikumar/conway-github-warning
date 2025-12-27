@@ -37,6 +37,14 @@ class RedisSummaryQueue:
         _queue, value = item
         return value
 
+def get_summary_queue() -> "SummaryQueue | RedisSummaryQueue":
+    redis_url = (settings.REDIS_URL or "").strip()
+    if redis_url.startswith("redis://") or redis_url.startswith("rediss://"):
+        print("[startup] Using RedisSummaryQueue")
+        return RedisSummaryQueue(redis_url)
+    print("[startup] REDIS_URL missing/invalid; using in-memory SummaryQueue")
+    return SummaryQueue()
+
 async def _fetch_incident(db_path: str, incident_id: str) -> Optional[Dict[str, Any]]:
     async with connect(db_path) as db:
         cur = await db.execute(
