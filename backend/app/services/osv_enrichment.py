@@ -141,7 +141,9 @@ async def _fetch_incident(db_path: str, incident_id: str) -> Optional[Dict[str, 
             SELECT
               incident_id, kind, repo_full_name, workflow_name, run_id,
               status, conclusion, html_url, created_at, updated_at, title,
-              tags_json, evidence_json, summary_json, enrichment_json
+              tags_json, evidence_json, summary_json, enrichment_json,
+              why_this_fired, risk_trajectory, risk_trajectory_reason,
+              scope, surface, actor_json
             FROM incidents
             WHERE incident_id = ?
             """,
@@ -154,7 +156,9 @@ async def _fetch_incident(db_path: str, incident_id: str) -> Optional[Dict[str, 
     (
         incident_id, kind, repo_full_name, workflow_name, run_id,
         status, conclusion, html_url, created_at, updated_at, title,
-        tags_json, evidence_json, summary_json, enrichment_json
+        tags_json, evidence_json, summary_json, enrichment_json,
+        why_this_fired, risk_trajectory, risk_trajectory_reason,
+        scope, surface, actor_json
     ) = row
 
     return {
@@ -173,6 +177,12 @@ async def _fetch_incident(db_path: str, incident_id: str) -> Optional[Dict[str, 
         "evidence": json.loads(evidence_json),
         "summary": json.loads(summary_json) if summary_json else {},
         "enrichment": json.loads(enrichment_json) if enrichment_json else None,
+        "why_this_fired": why_this_fired,
+        "risk_trajectory": risk_trajectory,
+        "risk_trajectory_reason": risk_trajectory_reason,
+        "scope": scope,
+        "surface": surface,
+        "actor": json.loads(actor_json) if actor_json else None,
     }
 
 async def _fetch_package_json(gh: GitHubClient, owner: str, repo: str, sha: str) -> Dict[str, Any]:
@@ -278,4 +288,10 @@ async def osv_worker_loop(db_path: str, queue: EnrichmentQueue, broadcaster) -> 
             "_event": "incident_enriched",
             "incident_id": incident_id,
             "enrichment": enrichment,
+            "why_this_fired": incident.get("why_this_fired"),
+            "risk_trajectory": incident.get("risk_trajectory"),
+            "risk_trajectory_reason": incident.get("risk_trajectory_reason"),
+            "scope": incident.get("scope"),
+            "surface": incident.get("surface"),
+            "actor": incident.get("actor"),
         })

@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS incidents (
   evidence_json  TEXT NOT NULL,
   summary_json   TEXT,
   enrichment_json TEXT,
+  why_this_fired TEXT,
+  risk_trajectory TEXT,
+  risk_trajectory_reason TEXT,
+  scope          TEXT,
+  surface        TEXT,
+  actor_json     TEXT,
   inserted_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -55,6 +61,18 @@ async def init_db(db_path: str) -> None:
             await db.execute("ALTER TABLE incidents ADD COLUMN dedupe_key TEXT")
         if "enrichment_json" not in cols:
             await db.execute("ALTER TABLE incidents ADD COLUMN enrichment_json TEXT")
+        if "why_this_fired" not in cols:
+            await db.execute("ALTER TABLE incidents ADD COLUMN why_this_fired TEXT")
+        if "risk_trajectory" not in cols:
+            await db.execute("ALTER TABLE incidents ADD COLUMN risk_trajectory TEXT")
+        if "risk_trajectory_reason" not in cols:
+            await db.execute("ALTER TABLE incidents ADD COLUMN risk_trajectory_reason TEXT")
+        if "scope" not in cols:
+            await db.execute("ALTER TABLE incidents ADD COLUMN scope TEXT")
+        if "surface" not in cols:
+            await db.execute("ALTER TABLE incidents ADD COLUMN surface TEXT")
+        if "actor_json" not in cols:
+            await db.execute("ALTER TABLE incidents ADD COLUMN actor_json TEXT")
         await db.commit()
 
 def connect(db_path: str):

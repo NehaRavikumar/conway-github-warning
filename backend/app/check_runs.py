@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from .config import settings
 from .incidents import insert_incident
+from .incident_fields import apply_incident_fields
 from .github import GitHubClient
 from .poll_events import RECENT_REPOS
 from .repos import RepoScheduler
@@ -99,6 +100,7 @@ async def check_runs_loop(
                 for run in runs:
                     if run.get("conclusion") in FAIL_CONCLUSIONS:
                         inc = run_to_incident(run, repo_full_name)
+                        apply_incident_fields(inc)
                         head_sha = run.get("head_sha")
                         if head_sha:
                             try:
@@ -132,6 +134,9 @@ async def check_runs_loop(
                                 "created_at": inc["created_at"],
                                 "tags": inc["_tags"],
                                 "evidence": inc["_evidence"],
+                                "scope": inc.get("scope"),
+                                "surface": inc.get("surface"),
+                                "actor": inc.get("actor"),
                             }
                             await broadcaster.publish(card)
                             await summary_queue.enqueue(inc["incident_id"])

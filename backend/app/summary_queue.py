@@ -44,7 +44,9 @@ async def _fetch_incident(db_path: str, incident_id: str) -> Optional[Dict[str, 
             SELECT
               incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
               status, conclusion, html_url, created_at, updated_at, title,
-              tags_json, evidence_json, inserted_at
+              tags_json, evidence_json, summary_json,
+              why_this_fired, risk_trajectory, risk_trajectory_reason,
+              scope, surface, actor_json, inserted_at
             FROM incidents
             WHERE incident_id = ?
             """,
@@ -57,7 +59,9 @@ async def _fetch_incident(db_path: str, incident_id: str) -> Optional[Dict[str, 
     (
         incident_id, kind, run_id, repo_full_name, workflow_name, run_number,
         status, conclusion, html_url, created_at, updated_at, title,
-        tags_json, evidence_json, inserted_at
+        tags_json, evidence_json, summary_json,
+        why_this_fired, risk_trajectory, risk_trajectory_reason,
+        scope, surface, actor_json, inserted_at
     ) = row
 
     return {
@@ -75,6 +79,13 @@ async def _fetch_incident(db_path: str, incident_id: str) -> Optional[Dict[str, 
         "title": title,
         "tags": json.loads(tags_json),
         "evidence": json.loads(evidence_json),
+        "summary": json.loads(summary_json) if summary_json else None,
+        "why_this_fired": why_this_fired,
+        "risk_trajectory": risk_trajectory,
+        "risk_trajectory_reason": risk_trajectory_reason,
+        "scope": scope,
+        "surface": surface,
+        "actor": json.loads(actor_json) if actor_json else None,
         "inserted_at": inserted_at,
     }
 
@@ -111,6 +122,7 @@ async def _build_summary(incident: Dict[str, Any]) -> Dict[str, Any]:
         "root_cause": root_cause,
         "impact": impact,
         "next_steps": next_steps,
+        "why_this_fired": "",
         "risk_trajectory": "stable",
         "risk_trajectory_reason": "Insufficient trend data; defaulting to stable.",
     }
@@ -126,6 +138,12 @@ def _validate_trajectory(payload: Dict[str, Any]) -> Dict[str, Any]:
         "risk_trajectory": traj,
         "risk_trajectory_reason": reason,
     }
+
+def _validate_why(payload: Dict[str, Any]) -> str:
+    why = payload.get("why_this_fired")
+    if not why or not isinstance(why, str):
+        return ""
+    return why[:120]
 
 async def _fetch_recent_repo_incidents(db_path: str, repo_full_name: str, limit: int = 5) -> List[Dict[str, Any]]:
     async with connect(db_path) as db:
@@ -170,6 +188,7 @@ async def _llm_summary(incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     system = (
         "You are a security incident summarizer. Return ONLY JSON with keys "
         "root_cause, impact, next_steps (arrays of 3-5 bullets), plus "
+        "why_this_fired (1 concise sentence, max 120 chars), "
         "risk_trajectory (increasing|stable|recovering) and risk_trajectory_reason (1 sentence). "
         "Do not include secrets or token values. Keep each bullet under 20 words."
     )
@@ -210,6 +229,7 @@ async def _llm_summary(incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 return None
             traj = _validate_trajectory(parsed)
             parsed.update(traj)
+            parsed["why_this_fired"] = _validate_why(parsed)
             print("[summary] LLM summary generated")
             return parsed
     except Exception as e:
@@ -242,4 +262,7 @@ async def summary_worker_loop(db_path: str, queue: Any, broadcaster) -> None:
         # Emit updated card with summary for live clients.
         card = dict(incident)
         card["summary"] = summary
+        card["why_this_fired"] = summary.get("why_this_fired")
+        card["risk_trajectory"] = summary.get("risk_trajectory")
+        card["risk_trajectory_reason"] = summary.get("risk_trajectory_reason")
         await broadcaster.publish(card)
