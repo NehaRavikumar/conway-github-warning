@@ -68,14 +68,7 @@ To keep this actionable rather than noisy, vulnerability enrichment (via OSV.dev
 
 ## Improvements & Next Steps
 
-- **Organization-wide correlation**  
-  Extend detection beyond single repositories to surface patterns across multiple repos within the same organization.
-
-- **Longer-horizon risk tracking**  
-  As the system runs for longer, aggregate views could visualize risk accumulation and recovery trends over time.
-
-- **Human-in-the-loop feedback**  
-  Add mechanisms for operators to acknowledge, dismiss, or escalate incidents to improve prioritization and trajectory assessment.
-
-- **Timeline reconstruction for multi-step incidents**  
-  Surface causal sequences (e.g. workflow modified → secret referenced → outbound POST → detection) to further improve interpretability.
+- Org-wide patterns: currently only tracking issues for each repo and looking at ecosystem wide issue, a next step would be to cluster and look at signals for repos on an org-wide basis.
+- As the system runs for longer, summary graphs could be used to track  risk accumulation fover time or certain repos
+- Add a human feedback loop for the summaries and risk assesment
+- Add timelines for multi-process issues (ex. workflow modified → secret referenced → outbound POST → detection)
