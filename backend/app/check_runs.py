@@ -13,6 +13,7 @@ from .sse import IncidentBroadcaster
 from .summary_queue import SummaryQueue
 from .services.run_logs import RunLogFetcher
 from .services.signal_pipeline import process_run_logs_for_signals
+from .services.osv_enrichment import maybe_enqueue_enrichment
 from .types.signal import RunContext
 
 FAIL_CONCLUSIONS = {"failure", "timed_out"}
@@ -62,6 +63,7 @@ def run_to_incident(run: Dict[str, Any], repo_full_name: str) -> Dict[str, Any]:
 async def check_runs_loop(
     broadcaster: IncidentBroadcaster,
     summary_queue: SummaryQueue,
+    enrichment_queue,
     correlator,
     plugins,
 ):
@@ -97,6 +99,22 @@ async def check_runs_loop(
                 for run in runs:
                     if run.get("conclusion") in FAIL_CONCLUSIONS:
                         inc = run_to_incident(run, repo_full_name)
+                        head_sha = run.get("head_sha")
+                        if head_sha:
+                            try:
+                                checks = await gh.get_check_runs(owner, repo, head_sha)
+                                check_runs = []
+                                for c in checks.get("check_runs", [])[:5]:
+                                    check_runs.append({
+                                        "name": c.get("name"),
+                                        "conclusion": c.get("conclusion"),
+                                        "started_at": c.get("started_at"),
+                                        "completed_at": c.get("completed_at"),
+                                    })
+                                inc["_evidence"]["check_runs"] = check_runs
+                                inc["evidence_json"] = json.dumps(inc["_evidence"])
+                            except Exception as e:
+                                print(f"[runs] check-runs fetch failed: {type(e).__name__}")
 
                         inserted = await insert_incident(settings.DB_PATH, inc)
                         if inserted:
@@ -117,6 +135,7 @@ async def check_runs_loop(
                             }
                             await broadcaster.publish(card)
                             await summary_queue.enqueue(inc["incident_id"])
+                            await maybe_enqueue_enrichment(inc, enrichment_queue, settings.DB_PATH)
                             emitted += 1
 
                         run_ctx = RunContext(
@@ -138,6 +157,8 @@ async def check_runs_loop(
                                 settings.DB_PATH,
                                 broadcaster,
                                 source="live",
+                                summary_queue=summary_queue,
+                                enrichment_queue=enrichment_queue,
                             )
 
                         # v1: single failure card per repo per cycle

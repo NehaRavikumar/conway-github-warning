@@ -7,7 +7,8 @@ from .config import settings
 from .db import connect
 from .github import GitHubClient
 from .incidents import insert_incident
-from .signals.workflow_exfiltration import detect_ghostaction_risk, FetchBudget
+from .signals.workflow_exfiltration import detect_ghostaction_risk, detect_personalized_exfiltration, FetchBudget
+from .services.osv_enrichment import maybe_enqueue_enrichment
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -55,7 +56,7 @@ def add_recent_repo(repo_full_name: Optional[str]) -> None:
     if len(RECENT_REPOS) > 500:
         del RECENT_REPOS[:250]
 
-async def poll_events_loop(broadcaster, summary_queue):
+async def poll_events_loop(broadcaster, summary_queue, enrichment_queue):
     gh = GitHubClient(settings.GITHUB_TOKEN)
 
     while True:
@@ -72,7 +73,9 @@ async def poll_events_loop(broadcaster, summary_queue):
                     new_count += 1
                     add_recent_repo(row.get("repo_full_name"))
 
-                    incidents = await detect_ghostaction_risk(ev, gh, budget)
+                    incidents = []
+                    incidents.extend(await detect_ghostaction_risk(ev, gh, budget))
+                    incidents.extend(await detect_personalized_exfiltration(ev, gh, budget))
                     for inc in incidents:
                         ok = await insert_incident(settings.DB_PATH, inc)
                         if ok:
@@ -93,6 +96,7 @@ async def poll_events_loop(broadcaster, summary_queue):
                             }
                             await broadcaster.publish(card)
                             await summary_queue.enqueue(inc["incident_id"])
+                            await maybe_enqueue_enrichment(inc, enrichment_queue, settings.DB_PATH)
             # small visible signal in logs
             if new_count:
                 print(f"[poll] inserted {new_count} new events; recent_repos={len(RECENT_REPOS)}")

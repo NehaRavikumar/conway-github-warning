@@ -47,7 +47,7 @@ class EcosystemCorrelator:
         self.window = timedelta(minutes=window_minutes)
         self.min_repos = min_repos
         self.min_owners = min_owners
-        self.cooldown = timedelta(minutes=cooldown_minutes)
+        self.cooldown = timedelta(minutes=cooldown_minutes) if cooldown_minutes > 0 else None
         self._entries: Dict[str, List[CorrelatorEntry]] = defaultdict(list)
         self._last_emit: Dict[str, datetime] = {}
         self._now = now_fn or _now_utc
@@ -84,10 +84,11 @@ class EcosystemCorrelator:
         if len(unique_repos) < self.min_repos or len(unique_owners) < self.min_owners:
             return None
 
-        last_emit = self._last_emit.get(signature)
         now = self._now()
-        if last_emit and (now - last_emit) < self.cooldown:
-            return None
+        if self.cooldown is not None:
+            last_emit = self._last_emit.get(signature)
+            if last_emit and (now - last_emit) < self.cooldown:
+                return None
 
         self._last_emit[signature] = now
         return self._build_incident(signature, entries, source, now)
@@ -148,7 +149,11 @@ class EcosystemCorrelator:
             "next_steps": next_steps,
         }
 
-        dedupe_key = f"ecosystem:{signature}:{int(now.timestamp() // self.cooldown.total_seconds())}"
+        if self.cooldown is None:
+            bucket = int(now.timestamp())
+        else:
+            bucket = int(now.timestamp() // self.cooldown.total_seconds())
+        dedupe_key = f"ecosystem:{signature}:{bucket}"
         run_id = _stable_run_id(dedupe_key)
         tags = [
             "ecosystem",

@@ -4,6 +4,8 @@ from app.db import init_db, connect
 from app.plugins.npm_auth_token_expired import NpmAuthTokenExpiredPlugin
 from app.replay.fixtures import run_replay_fixtures
 from app.services.correlator import EcosystemCorrelator
+from app.summary_queue import SummaryQueue
+from app.services.osv_enrichment import EnrichmentQueue
 
 class DummyBroadcaster:
     def __init__(self):
@@ -26,8 +28,10 @@ async def test_replay_fixtures_emit_single_incident(tmp_path):
     plugins = [NpmAuthTokenExpiredPlugin()]
     broadcaster = DummyBroadcaster()
 
-    emitted = await run_replay_fixtures(plugins, correlator, broadcaster, str(db_path))
-    assert emitted == 1
+    queue = SummaryQueue()
+    enrichment_queue = EnrichmentQueue()
+    emitted = await run_replay_fixtures(plugins, correlator, broadcaster, str(db_path), queue, enrichment_queue)
+    assert emitted == 2
 
     async with connect(str(db_path)) as db:
         cur = await db.execute(

@@ -1,6 +1,7 @@
 from typing import Any, Dict, Iterable, List
 
-from ..incidents import insert_incident, set_summary
+from ..incidents import insert_incident
+from ..services.osv_enrichment import maybe_enqueue_enrichment
 from ..types.signal import RunContext, SignalPlugin
 
 async def process_run_logs_for_signals(
@@ -11,6 +12,8 @@ async def process_run_logs_for_signals(
     db_path: str,
     broadcaster,
     source: str,
+    summary_queue,
+    enrichment_queue,
     ) -> int:
     emitted = 0
     for entry in logs:
@@ -47,7 +50,8 @@ async def process_run_logs_for_signals(
             inserted = await insert_incident(db_path, incident)
             if not inserted:
                 continue
-            await set_summary(db_path, incident["incident_id"], summary)
+            await summary_queue.enqueue(incident["incident_id"])
+            await maybe_enqueue_enrichment(incident, enrichment_queue, db_path)
 
             card = {
                 "incident_id": incident["incident_id"],
@@ -63,7 +67,6 @@ async def process_run_logs_for_signals(
                 "created_at": incident["created_at"],
                 "tags": incident["_tags"],
                 "evidence": incident["_evidence"],
-                "summary": summary,
             }
             await broadcaster.publish(card)
             emitted += 1
