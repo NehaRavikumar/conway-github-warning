@@ -4,13 +4,13 @@
 
 
 - **Workflow-first threat model inspired by real attacks**  
-  Detection logic is explicitly shaped by real-world workflow hijacking incidents, focusing on configuration drift, secret reuse, and personalized exfiltration patterns *before* an exploit or outage occurs.
+  Detection logic is explicitly shaped by real-world workflow hijacking incidents, focusing on configuration drift, secret reuse, and personalized exfiltration patterns before an exploit or outage occurs.
 
 - **Signals as risk expansion, not isolated events**  
   Instead of treating GitHub events as standalone alerts, the system defines signals as moments where operational power (automation, secrets, dependencies) expands faster than guardrails.
 
-- **Ecosystem exposure as a first-class signal**  
-  Repositories are flagged not only when they fail locally, but when they depend on external ecosystems (e.g. npm) that are currently unstable elsewhere, surfacing second-order risk early.
+- **Ecosystem exposure as first-class signal**  
+  Repos are flagged not only when they fail locally, but when they depend on external ecosystems (like npm) that are currently unstable elsewhere, surfacing second-order risk early
 
 - **Contextual vulnerability enrichment, not blanket scanning**  
   Known vulnerabilities (via OSV.dev) are queried only for dependencies implicated by the triggering signal, framing vulnerabilities as contextual exposure rather than static defects.
@@ -22,9 +22,9 @@
 
 ## Inspiration & Motivation
 
-This project was motivated by a recurring pattern in recent real-world incidents: **serious GitHub failures rarely begin with an obvious exploit or outage**. Instead, they emerge from small, legitimate-looking changes to workflows, automation, or dependencies that quietly expand risk over time—often going unnoticed until the blast radius is already large.
+This project was motivated by a recurring pattern in recent real-world incidents (serious GitHub failures rarely begin with an obvious exploit or outage). Instead they emerge from small legitimate looking changes to workflows or dependencies that quietly expand risk over time, often going unnoticed until the blast radius is already large.
 
-Rather than treating these incidents as isolated failures, the system is designed around the idea that **risk accumulates gradually through operational power**, and that early warning comes from detecting *how that power changes*.
+Rather than treating these incidents as isolated failures, the system is designed around the idea that risk accumulates gradually through operational power, and that early warning comes from detecting how it changes.
 
 Two classes of incidents directly shaped both the detectors and the presentation of signals in this system.
 
@@ -48,7 +48,7 @@ Detectors explicitly look for:
 - expansion in secret usage  
 - personalized exfiltration patterns  
 
-Crucially, these signals are surfaced **even when no exploit or outage has yet occurred**, reflecting the insight that workflow abuse is often detectable *before* damage is visible.
+Crucially, these signals are surfaced even when no exploit or outage has yet occurred, reflecting the insight that workflow abuse is often detectable before damage is visible.
 
 ---
 
@@ -57,19 +57,19 @@ Crucially, these signals are surfaced **even when no exploit or outage has yet o
 A second major influence came from recent npm supply-chain disruptions  
 (see: https://dev.to/usman_awan/the-night-npm-caught-fire-inside-the-2025-javascript-supply-chain-meltdown-52o3), which highlighted a different but related failure mode:
 
-- A single compromised maintainer or authentication failure can ripple across thousands of repositories  
+- A single compromised maintainer or authentication failure can ripple across thousands of repos  
 - Many affected projects were “innocent bystanders” whose own code never changed  
 - Risk was visible at the ecosystem level before local failures, but most tooling reacted only after breakage  
 
-This directly motivated treating **ecosystem exposure as a first-class signal**. In this system, repositories are flagged not only when they fail locally, but when they depend on infrastructure that is currently unstable elsewhere.
+This directly motivated treating ecosystem exposure as a first-class signal. In this system, repositories are flagged not only when they fail locally, but when they depend on infrastructure that is currently unstable elsewhere.
 
-To keep this actionable rather than noisy, vulnerability enrichment (via OSV.dev) is intentionally scoped to **dependencies implicated by the triggering signal**, framing vulnerabilities as contextual exposure rather than static defects.
+To keep this actionable rather than noisy, vulnerability enrichment (via OSV.dev) is intentionally scoped to dependencies implicated by the triggering signal, framing vulnerabilities as contextual exposure rather than static defects.
 
 ---
 
 ## Improvements & Next Steps
 
 - Org-wide patterns: currently only tracking issues for each repo and looking at ecosystem wide issue, a next step would be to cluster and look at signals for repos on an org-wide basis.
-- As the system runs for longer, summary graphs could be used to track  risk accumulation fover time or certain repos
+- As the system runs for longer, summary graphs could be used to track  risk accumulation over time for certain repos
 - Add a human feedback loop for the summaries and risk assesment
-- Add timelines for multi-process issues (ex. workflow modified → secret referenced → outbound POST → detection)
+- Add timelines in UI for multi-process issues (ex. explicitly showing workflow modified → secret referenced → outbound POST → detection)
